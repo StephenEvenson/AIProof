@@ -121,3 +121,66 @@ export const SUPPLIERS: SupplierOption[] = [
 // Page size options
 export const PAGE_SIZE_OPTIONS = [50, 100, 200] as const;
 export type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
+
+// Task status types for async operations
+export type TaskStatusType = 'pending' | 'processing' | 'completed' | 'failed';
+
+export interface TaskProgress {
+  total: number;
+  processed: number;
+  failed: number;
+  skipped: number;
+}
+
+export interface TaskStatus {
+  task_id: string;
+  task_type?: string;
+  status: TaskStatusType;
+  progress?: TaskProgress;
+  results?: {
+    total: number;
+    processed: number;
+    failed: number;
+    skipped: number;
+    results: Array<{
+      product_id: string;
+      status: string;
+      images_generated?: number;
+    }>;
+    errors?: Array<{
+      product_id: string;
+      error: string;
+    }>;
+  };
+  error?: string;
+  created_at?: string;
+  updated_at?: string;
+  completed_at?: string;
+}
+
+export interface TaskSubmitResponse {
+  success: boolean;
+  status_code?: number;
+  message?: string;
+  data: {
+    task_id: string;
+    status: TaskStatusType;
+    product_count?: number;
+  };
+}
+
+export interface TaskCheckResponse {
+  success: boolean;
+  data: TaskStatus;
+}
+
+// Active generation task tracker
+export interface GenerationTask {
+  taskId: string;
+  productIds: string[];
+  status: TaskStatusType;
+  startedAt: Date;
+}
+
+// Polling interval in milliseconds
+export const TASK_POLLING_INTERVAL = 10000; // 10 seconds

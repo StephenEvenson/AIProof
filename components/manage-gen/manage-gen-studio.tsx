@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { ImageIcon } from "lucide-react";
 import { SupplierSelector } from "./supplier-selector";
 import { ProductTable } from "./product-table";
@@ -10,11 +10,13 @@ import {
   Product,
   GenerationStatus,
   ProductListResponse,
-  GenerationCheckResponse,
   BrandingResult,
   SUPPLIERS,
   PAGE_SIZE_OPTIONS,
   PageSize,
+  GenerationTask,
+  TaskStatusType,
+  TASK_POLLING_INTERVAL,
 } from "@/lib/types";
 
 export function ManageGenStudio() {
@@ -41,8 +43,21 @@ export function ManageGenStudio() {
   >(new Map());
   const [statusLoading, setStatusLoading] = useState(false);
 
-  // Generating state (track which products are currently being generated)
-  const [generatingIds, setGeneratingIds] = useState<Set<string>>(new Set());
+  // Active tasks state (for async processing)
+  const [activeTasks, setActiveTasks] = useState<Map<string, GenerationTask>>(
+    new Map()
+  );
+
+  // Generating state - computed from activeTasks
+  const generatingIds = new Set<string>();
+  activeTasks.forEach((task) => {
+    if (task.status === "pending" || task.status === "processing") {
+      task.productIds.forEach((id) => generatingIds.add(id));
+    }
+  });
+
+  // Polling intervals ref
+  const pollingIntervalsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
   // Preview modal state
   const [previewProduct, setPreviewProduct] = useState<{
@@ -141,18 +156,88 @@ export function ManageGenStudio() {
     }
   };
 
-  // Trigger generation for products
-  const generateLineProductImage = async (
+  // Check task status via check_task action
+  const checkTaskStatus = async (taskId: string): Promise<TaskStatusType | null> => {
+    try {
+      const response = await fetch("/api/proxy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetUrl: lambdaUrl,
+          action: "check_task",
+          task_id: taskId,
+        }),
+      });
+
+      const data = await response.json();
+      let parsed = data;
+      if (data.body && typeof data.body === "string") {
+        parsed = JSON.parse(data.body);
+      }
+
+      if (parsed.success && parsed.data) {
+        return parsed.data.status as TaskStatusType;
+      }
+      return null;
+    } catch (err) {
+      console.error("Failed to check task status:", err);
+      return null;
+    }
+  };
+
+  // Start polling for a task
+  const startPolling = (taskId: string, productIds: string[]) => {
+    // Clear existing interval if any
+    const existingInterval = pollingIntervalsRef.current.get(taskId);
+    if (existingInterval) {
+      clearInterval(existingInterval);
+    }
+
+    // Set up new polling interval
+    const intervalId = setInterval(async () => {
+      const status = await checkTaskStatus(taskId);
+
+      if (status) {
+        // Update task status
+        setActiveTasks((prev) => {
+          const newMap = new Map(prev);
+          const task = newMap.get(taskId);
+          if (task) {
+            newMap.set(taskId, { ...task, status });
+          }
+          return newMap;
+        });
+
+        // If completed or failed, stop polling and refresh status
+        if (status === "completed" || status === "failed") {
+          clearInterval(intervalId);
+          pollingIntervalsRef.current.delete(taskId);
+
+          // Remove task from active tasks after a short delay
+          setTimeout(() => {
+            setActiveTasks((prev) => {
+              const newMap = new Map(prev);
+              newMap.delete(taskId);
+              return newMap;
+            });
+          }, 1000);
+
+          // Refresh generation status for affected products
+          if (status === "completed") {
+            await checkGenerationStatus(productIds);
+          }
+        }
+      }
+    }, TASK_POLLING_INTERVAL);
+
+    pollingIntervalsRef.current.set(taskId, intervalId);
+  };
+
+  // Submit generation task (async)
+  const submitGenerationTask = async (
     productIds: string[],
     forceRegenerate = false
-  ) => {
-    // Add to generating state
-    setGeneratingIds((prev) => {
-      const newSet = new Set(prev);
-      productIds.forEach((id) => newSet.add(id));
-      return newSet;
-    });
-
+  ): Promise<{ success: boolean; taskId?: string; error?: string }> => {
     try {
       const response = await fetch("/api/proxy", {
         method: "POST",
@@ -171,38 +256,57 @@ export function ManageGenStudio() {
         parsed = JSON.parse(data.body);
       }
 
-      if (parsed.success) {
-        // Refresh status after generation
-        await checkGenerationStatus(productIds);
-        return { success: true, data: parsed.data };
+      if (parsed.success && parsed.data?.task_id) {
+        const taskId = parsed.data.task_id;
+
+        // Add to active tasks
+        const newTask: GenerationTask = {
+          taskId,
+          productIds,
+          status: "pending",
+          startedAt: new Date(),
+        };
+        setActiveTasks((prev) => {
+          const newMap = new Map(prev);
+          newMap.set(taskId, newTask);
+          return newMap;
+        });
+
+        // Start polling for this task
+        startPolling(taskId, productIds);
+
+        return { success: true, taskId };
       } else {
-        return { success: false, error: parsed.error || parsed.message };
+        return {
+          success: false,
+          error: parsed.error || parsed.message || "Failed to submit task",
+        };
       }
     } catch (err) {
       return {
         success: false,
-        error: err instanceof Error ? err.message : "Generation failed",
+        error: err instanceof Error ? err.message : "Failed to submit task",
       };
-    } finally {
-      // Remove from generating state
-      setGeneratingIds((prev) => {
-        const newSet = new Set(prev);
-        productIds.forEach((id) => newSet.delete(id));
-        return newSet;
-      });
     }
   };
 
   // Handle single product generation
   const handleGenerate = async (productId: string) => {
-    await generateLineProductImage([productId]);
+    const result = await submitGenerationTask([productId]);
+    if (!result.success) {
+      console.error("Generation failed:", result.error);
+    }
   };
 
   // Handle batch generation
   const handleBatchGenerate = async () => {
     if (selectedIds.size === 0) return;
-    await generateLineProductImage(Array.from(selectedIds));
-    setSelectedIds(new Set()); // Clear selection after batch
+    const result = await submitGenerationTask(Array.from(selectedIds));
+    if (result.success) {
+      setSelectedIds(new Set()); // Clear selection after batch
+    } else {
+      console.error("Batch generation failed:", result.error);
+    }
   };
 
   // Handle selection toggle
@@ -261,6 +365,16 @@ export function ManageGenStudio() {
     fetchProducts();
   }, [fetchProducts]);
 
+  // Cleanup polling intervals on unmount
+  useEffect(() => {
+    return () => {
+      pollingIntervalsRef.current.forEach((intervalId) => {
+        clearInterval(intervalId);
+      });
+      pollingIntervalsRef.current.clear();
+    };
+  }, []);
+
   return (
     <div className="min-h-screen bg-white text-zinc-900">
       <div className="max-w-[1600px] mx-auto px-6 py-6 flex flex-col h-screen">
@@ -289,6 +403,15 @@ export function ManageGenStudio() {
             <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-600">
               <p className="font-medium">Error</p>
               <p className="text-sm">{error}</p>
+            </div>
+          )}
+
+          {/* Active Tasks Indicator */}
+          {activeTasks.size > 0 && (
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-700">
+              <p className="text-sm">
+                {activeTasks.size} task{activeTasks.size !== 1 ? "s" : ""} in progress...
+              </p>
             </div>
           )}
 

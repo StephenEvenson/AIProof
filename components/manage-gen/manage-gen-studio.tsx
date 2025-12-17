@@ -48,8 +48,16 @@ export function ManageGenStudio() {
     new Map()
   );
 
-  // Generating state - computed from activeTasks
+  // Pending generations state - tracks product IDs that are being submitted (before API response)
+  const [pendingGenerations, setPendingGenerations] = useState<Set<string>>(
+    new Set()
+  );
+
+  // Generating state - computed from pendingGenerations and activeTasks
   const generatingIds = new Set<string>();
+  // Include pending submissions (button clicked but API not yet responded)
+  pendingGenerations.forEach((id) => generatingIds.add(id));
+  // Include active tasks (API responded, task in progress)
   activeTasks.forEach((task) => {
     if (task.status === "pending" || task.status === "processing") {
       task.productIds.forEach((id) => generatingIds.add(id));
@@ -238,6 +246,13 @@ export function ManageGenStudio() {
     productIds: string[],
     forceRegenerate = false
   ): Promise<{ success: boolean; taskId?: string; error?: string }> => {
+    // Immediately add to pending state for instant button disable
+    setPendingGenerations((prev) => {
+      const newSet = new Set(prev);
+      productIds.forEach((id) => newSet.add(id));
+      return newSet;
+    });
+
     try {
       const response = await fetch("/api/proxy", {
         method: "POST",
@@ -259,6 +274,13 @@ export function ManageGenStudio() {
       if (parsed.success && parsed.data?.task_id) {
         const taskId = parsed.data.task_id;
 
+        // Remove from pending (will be tracked by activeTasks now)
+        setPendingGenerations((prev) => {
+          const newSet = new Set(prev);
+          productIds.forEach((id) => newSet.delete(id));
+          return newSet;
+        });
+
         // Add to active tasks
         const newTask: GenerationTask = {
           taskId,
@@ -277,12 +299,24 @@ export function ManageGenStudio() {
 
         return { success: true, taskId };
       } else {
+        // Remove from pending on failure
+        setPendingGenerations((prev) => {
+          const newSet = new Set(prev);
+          productIds.forEach((id) => newSet.delete(id));
+          return newSet;
+        });
         return {
           success: false,
           error: parsed.error || parsed.message || "Failed to submit task",
         };
       }
     } catch (err) {
+      // Remove from pending on error
+      setPendingGenerations((prev) => {
+        const newSet = new Set(prev);
+        productIds.forEach((id) => newSet.delete(id));
+        return newSet;
+      });
       return {
         success: false,
         error: err instanceof Error ? err.message : "Failed to submit task",
@@ -291,8 +325,8 @@ export function ManageGenStudio() {
   };
 
   // Handle single product generation
-  const handleGenerate = async (productId: string) => {
-    const result = await submitGenerationTask([productId]);
+  const handleGenerate = async (productId: string, forceRegenerate = false) => {
+    const result = await submitGenerationTask([productId], forceRegenerate);
     if (!result.success) {
       console.error("Generation failed:", result.error);
     }

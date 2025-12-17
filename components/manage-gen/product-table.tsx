@@ -21,7 +21,7 @@ interface ProductTableProps {
   generatingIds: Set<string>;
   onSelectToggle: (productId: string) => void;
   onSelectAll: (checked: boolean) => void;
-  onGenerate: (productId: string) => void;
+  onGenerate: (productId: string, forceRegenerate: boolean) => void;
   onPreview: (productId: string) => void;
 }
 
@@ -95,7 +95,7 @@ export function ProductTable({
             statusLoading={statusLoading}
             isGenerating={generatingIds.has(product.id)}
             onSelectToggle={() => onSelectToggle(product.id)}
-            onGenerate={() => onGenerate(product.id)}
+            onGenerate={() => onGenerate(product.id, generationStatus.get(product.id)?.exists ?? false)}
             onPreview={() => onPreview(product.id)}
           />
         ))}

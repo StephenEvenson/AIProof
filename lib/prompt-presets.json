@@ -1,0 +1,26 @@
+[
+    {
+        "label": "None",
+        "value": ""
+    },
+    {
+        "label": "Smaller Logo",
+        "value": "Scale the logo to approximately 70% of its default size within the red dashed boundary, maintaining centered positioning"
+    },
+    {
+        "label": "Position Left",
+        "value": "Position the logo towards the left side of the red dashed boundary area while maintaining proper proportions"
+    },
+    {
+        "label": "Position Right",
+        "value": "Position the logo towards the right side of the red dashed boundary area while maintaining proper proportions"
+    },
+    {
+        "label": "Position Top",
+        "value": "Position the logo towards the top of the red dashed boundary area while maintaining proper proportions"
+    },
+    {
+        "label": "Position Bottom",
+        "value": "Position the logo towards the bottom of the red dashed boundary area while maintaining proper proportions"
+    }
+]
